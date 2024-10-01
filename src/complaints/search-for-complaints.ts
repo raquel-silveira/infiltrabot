@@ -1,9 +1,12 @@
 import type { Browser } from 'puppeteer';
 
-import { input, logSpinner } from './utils';
+import { input, logSpinner } from '../utils';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const WEBSITE_TITLES = ['protesteorg', 'reclame aqui'];
 const KEYWORDS = ['golpe whatsapp'];
+const COMPLAINTS_FILE_PATH = path.resolve('complaints.json');
 
 export class SearchForComplaints {
   constructor(private readonly browser: Browser) {}
@@ -17,6 +20,7 @@ export class SearchForComplaints {
     spinner.start();
 
     const validUrls: string[] = [];
+    const allPhoneNumbers: string[] = [];
 
     for (const keyword of KEYWORDS) {
       for (const websiteTitle of WEBSITE_TITLES) {
@@ -24,23 +28,28 @@ export class SearchForComplaints {
         spinner.text = `Buscando por: ${search}`;
 
         const urls = await this.getUrls({ search, total: 1 });
-        const urlsWithPhones = [];
 
         for (const url of urls) {
-          if (await this.urlHasPhoneNumberInTheContent(url)) {
-            urlsWithPhones.push(url);
+          const phoneNumbers = await this.urlHasPhoneNumberInTheContent(url);
+
+          if (phoneNumbers.length > 0) {
+            validUrls.push(url);
+            allPhoneNumbers.push(...phoneNumbers);
           }
         }
 
         console.log('');
-
-        validUrls.push(...urlsWithPhones);
       }
     }
 
     await this.browser.close();
-
     spinner.stop();
+
+    if (allPhoneNumbers.length > 0) {
+      this.saveComplaints(allPhoneNumbers, companyName);
+    } else {
+      console.log('Nenhum número de telefone encontrado.');
+    }
 
     return validUrls;
   }
@@ -80,23 +89,42 @@ export class SearchForComplaints {
     }
   }
 
-  private async urlHasPhoneNumberInTheContent(url: string): Promise<boolean> {
+  private async urlHasPhoneNumberInTheContent(url: string): Promise<string[]> {
     try {
       const page = await this.browser.newPage();
       await page.goto(url, { waitUntil: 'load', timeout: 0 });
 
       // Regular expression to match phone numbers
-      const phoneRegex = /\(?\d{2,3}\)?[\s-]?\d{4,5}[\s-]?\d{4}/g;
+      const phoneRegex = /\(?\d{2,3}\)?[\s-]?\d{4,5}[\s-]?\d{4}/;
       const content = await page.content();
-      const hasPhoneNumber = phoneRegex.test(content);
+      const phoneNumbers = content.match(phoneRegex) || [];
 
       await page.close();
 
-      return hasPhoneNumber;
+      return phoneNumbers;
     } catch (error) {
       console.error('Erro ao verificar o conteúdo da URL:', error);
-
-      return false;
+      return [];
     }
+  }
+
+  private saveComplaints(phoneNumbers: string[], companyName: string): void {
+    let complaints: { phoneNumber: string; companyName: string }[] = [];
+
+    if (fs.existsSync(COMPLAINTS_FILE_PATH)) {
+      const data = fs.readFileSync(COMPLAINTS_FILE_PATH, 'utf-8');
+      complaints = JSON.parse(data);
+    }
+
+    for (const phoneNumber of phoneNumbers) {
+      complaints.push({ phoneNumber, companyName });
+    }
+
+    fs.writeFileSync(
+      COMPLAINTS_FILE_PATH,
+      JSON.stringify(complaints, null, 2),
+      'utf-8'
+    );
+    console.log(`Reclamações salvas no arquivo complaints.json.`);
   }
 }
